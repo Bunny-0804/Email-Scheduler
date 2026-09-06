@@ -12,6 +12,7 @@ import {
   workerExecutionDurationHistogram,
   jobCounter,
 } from '../services/metrics';
+import { DRRScheduler } from './drrScheduler';
 
 function getHourWindowKey(senderEmail: string, date: Date = new Date()): { key: string; windowStr: string; nextHourMs: number } {
   const yyyy = date.getUTCFullYear();
@@ -32,7 +33,11 @@ export function startEmailWorker() {
   const worker = new Worker<EmailJobData>(
     EMAIL_QUEUE_NAME,
     async (job: Job<EmailJobData>) => {
-      const { jobId, scheduleId, userId, recipient, subject, body, attachments, senderEmail, hourlyLimit, scheduledAt } = job.data;
+      // Fetch fair DRR job across active tenants or fallback to job.data
+      const drrJobData = await DRRScheduler.popNextFairJob();
+      const actualJobData = drrJobData || job.data;
+
+      const { jobId, scheduleId, userId, recipient, subject, body, attachments, senderEmail, hourlyLimit, scheduledAt } = actualJobData;
       const traceId = generateTraceId();
 
       return runWithLogContext({ trace_id: traceId, tenant_id: userId || 'N/A', job_id: jobId }, async () => {
@@ -45,7 +50,7 @@ export function startEmailWorker() {
           queueDelayGauge.set({ schedule_id: scheduleId, sender_email: senderEmail }, queueDelaySec);
         }
 
-        logger.info(`🚀 Worker processing job ${jobId}`, { recipient, senderEmail, scheduleId });
+        logger.info(`🚀 DRR Fair Worker processing job ${jobId}`, { recipient, senderEmail, scheduleId, tenantId: userId });
 
         // 1. Rate Limit Check using Redis
         const { key, windowStr, nextHourMs } = getHourWindowKey(senderEmail);
@@ -88,7 +93,7 @@ export function startEmailWorker() {
 
           await emailQueue.add(
             'send-email',
-            { ...job.data },
+            { ...actualJobData },
             {
               delay: nextHourDelayMs,
               jobId: `email_job_${jobId}_rescheduled_${nextHourMs}`,
@@ -183,6 +188,6 @@ export function startEmailWorker() {
     logger.info(`🎉 Worker Job ${job.id} completed successfully`, { jobId: job.id });
   });
 
-  logger.info(`👷 BullMQ Email Worker started with concurrency level: ${workerConcurrency}`);
+  logger.info(`👷 BullMQ DRR Fair Email Worker started with concurrency level: ${workerConcurrency}`);
   return worker;
 }

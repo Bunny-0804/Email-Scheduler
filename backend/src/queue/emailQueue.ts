@@ -1,6 +1,7 @@
 import { Queue } from 'bullmq';
 import { redisConnectionOptions } from '../services/redis';
 import { EmailAttachmentInput } from '../services/smtp';
+import { DRRScheduler } from './drrScheduler';
 
 export const EMAIL_QUEUE_NAME = 'email-scheduler-queue';
 
@@ -46,34 +47,43 @@ export async function enqueueEmailBatch(params: {
   const now = Date.now();
   const startTimeMs = params.startTime.getTime();
   const baseDelayMs = Math.max(0, startTimeMs - now);
+  const tenantId = params.userId || params.senderEmail;
 
-  const bulkJobs = params.jobs.map((job, index) => {
+  const bulkJobs = [];
+
+  for (let index = 0; index < params.jobs.length; index++) {
+    const job = params.jobs[index];
     const pacerDelayMs = index * (params.delayBetweenSec * 1000);
     const totalDelayMs = baseDelayMs + pacerDelayMs;
     const scheduledTimestamp = new Date(now + totalDelayMs).toISOString();
 
-    return {
+    const jobData: EmailJobData = {
+      jobId: job.id,
+      scheduleId: params.scheduleId,
+      userId: params.userId,
+      recipient: job.recipient,
+      subject: params.subject,
+      body: params.body,
+      attachments: params.attachments,
+      senderEmail: params.senderEmail,
+      scheduledAt: scheduledTimestamp,
+      delayBetweenSec: params.delayBetweenSec,
+      hourlyLimit: params.hourlyLimit,
+    };
+
+    // Register job in tenant-isolated DRR queue
+    await DRRScheduler.enqueueJob(tenantId, jobData);
+
+    bulkJobs.push({
       name: 'send-email',
-      data: {
-        jobId: job.id,
-        scheduleId: params.scheduleId,
-        userId: params.userId,
-        recipient: job.recipient,
-        subject: params.subject,
-        body: params.body,
-        attachments: params.attachments,
-        senderEmail: params.senderEmail,
-        scheduledAt: scheduledTimestamp,
-        delayBetweenSec: params.delayBetweenSec,
-        hourlyLimit: params.hourlyLimit,
-      } as EmailJobData,
+      data: { ...jobData },
       opts: {
         delay: totalDelayMs,
         jobId: `email_job_${job.id}`,
       },
-    };
-  });
+    });
+  }
 
   await emailQueue.addBulk(bulkJobs);
-  console.log(`📦 Enqueued ${bulkJobs.length} delayed jobs for schedule batch ${params.scheduleId}`);
+  console.log(`📦 Enqueued ${bulkJobs.length} DRR fair-dispatch jobs for schedule batch ${params.scheduleId} (Tenant: ${tenantId})`);
 }
