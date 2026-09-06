@@ -1,0 +1,13 @@
+{
+  "name": "email-scheduler-system",
+  "version": "1.0.0",
+  "description": "Production-Grade Email Scheduler Service + Dashboard",
+  "private": true,
+  "scripts": {
+    "dev:backend": "cmd /c \"cd backend && npm run dev\"",
+    "dev:frontend": "cmd /c \"cd frontend && npm run dev\"",
+    "build": "cmd /c \"cd backend && npm run build\" && cmd /c \"cd frontend && npm run build\"",
+    "prisma:push": "cmd /c \"cd backend && npx prisma db push\"",
+    "prisma:studio": "cmd /c \"cd backend && npx prisma studio\""
+  }
+}
