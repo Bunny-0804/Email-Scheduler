@@ -13,6 +13,12 @@ services:
       - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d email_scheduler_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
 
   redis:
     image: redis:7-alpine
@@ -22,6 +28,12 @@ services:
       - "6379:6379"
     volumes:
       - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 3s
 
   elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch:8.11.3
@@ -35,6 +47,45 @@ services:
       - "9200:9200"
     volumes:
       - esdata:/usr/share/elasticsearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s http://localhost:9200/_cluster/health | grep -q '\"status\":\"green\"\\|\"status\":\"yellow\"'"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: email_scheduler_backend
+    restart: always
+    user: "node"
+    environment:
+      - PORT=4000
+      - DATABASE_URL=postgresql://postgres:postgrespassword@postgres:5432/email_scheduler_db?schema=public
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - ELASTICSEARCH_NODE=http://elasticsearch:9200
+      - JWT_SECRET=super-secret-jwt-key-for-production
+      - DEFAULT_HOURLY_LIMIT=100
+      - WORKER_CONCURRENCY=5
+      - LOG_LEVEL=info
+    ports:
+      - "4000:4000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:4000/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
 
 volumes:
   pgdata:
